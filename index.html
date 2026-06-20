@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PinkTileington — Oblique Projection Spritemap Extractor</title>
+  <meta name="description" content="Interactive browser tool for extracting tiles from oblique projection (3/4 top-down) spritemaps using affine grid transformations.">
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="css/index.css">
+
+  <!-- p5.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.3/p5.min.js"></script>
+  <!-- JSZip -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ═══════════════ HEADER ═══════════════ -->
+  <header id="header">
+    <div class="header-brand">
+      <div class="header-logo">◆</div>
+      <span class="header-title">PinkTileington</span>
+      <span class="header-subtitle">Oblique Spritesheet Extractor</span>
+    </div>
+    <div class="header-actions">
+      <button id="btn-import-json" class="btn btn-secondary" title="Import JSON Atlas">
+        📄 Import JSON
+      </button>
+      <button id="btn-load" class="btn btn-secondary" title="Load image">
+        📂 Open Image
+      </button>
+      <button id="btn-fit" class="btn btn-ghost btn-icon" title="Fit view" onclick="CanvasSketch.fitView()">
+        ⊞
+      </button>
+    </div>
+  </header>
+
+  <!-- ═══════════════ CANVAS ═══════════════ -->
+  <main id="canvas-container">
+    <!-- p5.js canvas mounts here -->
+    <div class="drop-zone empty-state">
+      <div class="drop-zone-icon">🎨</div>
+      <div class="drop-zone-text">Drop a spritesheet image here</div>
+      <div class="drop-zone-hint">or click to browse — PNG, JPG, WebP</div>
+    </div>
+    <input type="file" id="file-input" accept="image/*" style="display:none">
+    <input type="file" id="file-input-json" accept="application/json" style="display:none">
+  </main>
+
+  <!-- ═══════════════ SIDEBAR ═══════════════ -->
+  <aside id="sidebar">
+
+    <!-- Tabs -->
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" data-tab="panel-grid" id="tab-grid">Grid</button>
+      <button class="sidebar-tab" data-tab="panel-tiles" id="tab-tiles">Tiles</button>
+      <button class="sidebar-tab" data-tab="panel-collision" id="tab-collision">Collision</button>
+      <button class="sidebar-tab" data-tab="panel-export" id="tab-export">Export</button>
+    </div>
+
+    <!-- ─── Grid Panel ─── -->
+    <div class="sidebar-content">
+      <div id="panel-grid" class="tab-panel active">
+
+        <!-- Cell Size -->
+        <div class="control-group">
+          <div class="control-group-title">Cell Dimensions</div>
+
+          <div class="control-row">
+            <span class="control-label">Width</span>
+            <span class="control-value" id="val-cellW">64</span>
+          </div>
+          <input type="range" id="ctrl-cellW" step="1">
+
+          <div class="control-row">
+            <span class="control-label">Height</span>
+            <span class="control-value" id="val-cellH">64</span>
+          </div>
+          <input type="range" id="ctrl-cellH" step="1">
+        </div>
+
+        <!-- Shear -->
+        <div class="control-group">
+          <div class="control-group-title">Shear Angles</div>
+
+          <div class="control-row">
+            <span class="control-label">Shear X</span>
+            <span class="control-value" id="val-shearX">0°</span>
+          </div>
+          <input type="range" id="ctrl-shearX" step="1">
+
+          <div class="control-row">
+            <span class="control-label">Shear Y</span>
+            <span class="control-value" id="val-shearY">0°</span>
+          </div>
+          <input type="range" id="ctrl-shearY" step="1">
+        </div>
+
+        <!-- Origin -->
+        <div class="control-group">
+          <div class="control-group-title">Grid Origin</div>
+
+          <div class="control-row">
+            <span class="control-label">Offset X</span>
+            <span class="control-value" id="val-originX">0px</span>
+          </div>
+          <input type="range" id="ctrl-originX" step="1">
+
+          <div class="control-row">
+            <span class="control-label">Offset Y</span>
+            <span class="control-value" id="val-originY">0px</span>
+          </div>
+          <input type="range" id="ctrl-originY" step="1">
+        </div>
+
+        <!-- Grid Extent -->
+        <div class="control-group">
+          <div class="control-group-title">Grid Extent</div>
+
+          <div class="control-row">
+            <span class="control-label">Columns</span>
+            <span class="control-value" id="val-cols">10</span>
+          </div>
+          <input type="range" id="ctrl-cols" step="1">
+
+          <div class="control-row">
+            <span class="control-label">Rows</span>
+            <span class="control-value" id="val-rows">10</span>
+          </div>
+          <input type="range" id="ctrl-rows" step="1">
+        </div>
+
+        <div class="separator"></div>
+
+        <!-- Grid Appearance -->
+        <div class="control-group">
+          <div class="control-group-title">Appearance</div>
+
+          <div class="control-row">
+            <span class="control-label">Opacity</span>
+            <span class="control-value" id="val-opacity">50%</span>
+          </div>
+          <input type="range" id="ctrl-opacity" step="1">
+
+          <div class="control-row">
+            <span class="control-label">Color</span>
+            <input type="color" id="ctrl-gridColor" value="#e84393">
+          </div>
+
+          <div class="control-row mt-md">
+            <span class="control-label">Show Grid</span>
+            <label class="toggle">
+              <input type="checkbox" id="ctrl-showGrid" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="separator"></div>
+
+        <!-- Selection shortcuts -->
+        <div class="control-group">
+          <div class="control-group-title">Selection</div>
+          <div class="flex flex-col gap-sm">
+            <button id="btn-select-all" class="btn btn-secondary btn-block">Select All Cells</button>
+            <button id="btn-clear-selection" class="btn btn-ghost btn-block">Clear Selection</button>
+          </div>
+          <div class="mt-md text-sm text-muted">
+            <span class="kbd">Click</span> Select &nbsp;
+            <span class="kbd">Ctrl</span>+Click Toggle &nbsp;
+            <span class="kbd">Shift</span>+Click Range
+          </div>
+          <div class="mt-sm text-sm text-muted">
+            <span class="kbd">Alt</span>+Drag or <span class="kbd">Middle</span> Pan &nbsp;
+            <span class="kbd">Scroll</span> Zoom
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ─── Tiles Panel ─── -->
+      <div id="panel-tiles" class="tab-panel">
+
+        <div class="control-group">
+          <div class="control-group-title">Extraction</div>
+          <div class="flex flex-col gap-sm">
+            <button id="btn-extract" class="btn btn-primary btn-block btn-lg" disabled>
+              ⬇ Extract Selected Tiles
+            </button>
+            <button id="btn-clear-tiles" class="btn btn-ghost btn-block">Clear Extracted</button>
+          </div>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="control-group">
+          <div class="control-group-title">Tile Gallery</div>
+          <div id="tile-gallery" class="tile-gallery">
+            <div class="empty-state">
+              <div class="empty-state-icon">📦</div>
+              <div class="empty-state-text">No tiles extracted yet.<br>Select cells and click Extract.</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ─── Collision Panel ─── -->
+      <div id="panel-collision" class="tab-panel">
+
+        <div class="control-group">
+          <div class="control-group-title">Tile Preview</div>
+          <div class="collision-tile-preview">
+            <img id="collision-preview-img" src="" alt="Select a tile">
+          </div>
+          <div id="collision-tile-label" class="mono text-sm text-muted" style="text-align:center; margin-top:var(--sp-sm);">
+            No tile selected
+          </div>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="control-group">
+          <div class="control-group-title">Collision Type</div>
+          <select id="ctrl-collision-type">
+            <option value="none">None (passable)</option>
+            <option value="wall">Wall (solid)</option>
+            <option value="water">Water</option>
+            <option value="hazard">Hazard</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <div class="control-row">
+            <span class="control-label">Walkable</span>
+            <label class="toggle">
+              <input type="checkbox" id="ctrl-walkable" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="empty-state mt-lg">
+          <div class="text-sm text-muted">
+            Click a tile in the Gallery to edit its collision properties.
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ─── Export Panel ─── -->
+      <div id="panel-export" class="tab-panel">
+
+        <div class="control-group">
+          <div class="control-group-title">Export Format</div>
+
+          <div class="flex flex-col gap-sm">
+            <button id="btn-export-json" class="btn btn-primary btn-block btn-lg">
+              📄 Download JSON Atlas
+            </button>
+            <div class="text-sm text-muted">
+              Single JSON file with Base64-embedded tile images and collision data.
+            </div>
+          </div>
+
+          <div class="separator"></div>
+
+          <div class="flex flex-col gap-sm">
+            <button id="btn-export-zip" class="btn btn-secondary btn-block btn-lg">
+              📦 Download ZIP Archive
+            </button>
+            <div class="text-sm text-muted">
+              ZIP with atlas.json + individual PNG files in a <span class="mono">tiles/</span> folder.
+            </div>
+          </div>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="control-group">
+          <div class="control-group-title">Output Preview</div>
+          <pre class="mono text-sm" style="
+            background: var(--bg-secondary);
+            padding: var(--sp-md);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            overflow-x: auto;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 260px;
+            overflow-y: auto;
+          ">{
+  "meta": {
+    "tool": "PinkTileington",
+    "grid": { "cellW": 64, "cellH": 32, ... }
+  },
+  "tiles": [
+    {
+      "id": "tile_0_0",
+      "grid_x": 0, "grid_y": 0,
+      "visual_data": "data:image/png;base64,...",
+      "collision": {
+        "type": "wall",
+        "isWalkable": false
+      }
+    }
+  ]
+}</pre>
+        </div>
+
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══════════════ STATUS BAR ═══════════════ -->
+  <footer id="statusbar">
+    <div class="status-group">
+      <div class="status-item">
+        <span class="status-dot warning" id="status-dot"></span>
+        <span id="status-message">Ready</span>
+      </div>
+    </div>
+    <div class="status-group">
+      <div class="status-item">
+        <span class="text-muted">Cursor:</span>
+        <span class="mono" id="status-coords">—</span>
+      </div>
+      <div class="status-item">
+        <span class="text-muted">Image:</span>
+        <span class="mono" id="status-dimensions">—</span>
+      </div>
+      <div class="status-item">
+        <span class="mono text-accent" id="status-selected">0 selected</span>
+      </div>
+    </div>
+  </footer>
+
+</div>
+
+<!-- Toast container -->
+<div class="toast-container"></div>
+
+<!-- ═══════════════ SCRIPTS ═══════════════ -->
+<!-- Module load order: math → extraction → collision → export → canvas → app -->
+<script src="js/grid.js"></script>
+<script src="js/extractor.js"></script>
+<script src="js/collision.js"></script>
+<script src="js/exporter.js"></script>
+<script src="js/canvas.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
