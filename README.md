@@ -30,51 +30,28 @@ PinkTileington is a browser-based, interactive tool designed for extracting tile
 - **Visual Extraction:** Drop an image in, define the grid, and extract tiles using exact clipping paths that maintain correct transparency and angled edges.
 - **Collision Metadata:** Define walkability, collision type (wall, water, hazard, custom), and visually track which tiles have collision data.
 - **Export to JSON & ZIP:** Export your atlas as a single JSON file (with Base64 encoded PNGs) or as a ZIP archive containing individual PNG files and an `atlas.json` manifest.
+- **Native GameMaker Export:** Directly generate ready-to-use `.yy` sprite files with automatically configured `xorigin/yorigin` anchors and bounding box footprints based on the grid projection.
 - **Import JSON Atlases:** You can reload a previously exported JSON atlas to append more tiles to it, or edit the collision data of your existing set.
 - **Zero-Dependency Setup:** Runs entirely in the browser using HTML5 Canvas (p5.js) and JSZip. No build tools or Node.js server needed to run locally!
 
 ## GameMaker Studio Integration
 
-Once you have exported a **ZIP Archive** from PinkTileington, here is how you use the data in GameMaker Studio:
+PinkTileington provides a native export feature that generates GameMaker 2026 LTS compatible `.yy` sprite structures, completely eliminating manual configuration.
 
-1. **Importing the Sprites:**
-   - Extract the ZIP archive to your local machine.
-   - Open GameMaker Studio and create a new Sprite resource.
-   - Click "Import" and select all the individual `.png` files from the extracted `tiles/` folder. GameMaker will automatically import them as sequential sub-images (frames) of your sprite.
-   - *Tip:* Ensure the sprite's collision mask is set to "Precise" if your oblique tiles need precise edge detection, or leave it as a rectangle and handle collision via code.
+1. **Exporting the Project:**
+   - In PinkTileington, navigate to the **Export** tab and click **"Export GameMaker Project"**.
+   - This downloads a ZIP archive containing a structured `sprites/` directory.
 
-2. **Loading the Atlas Data (GML):**
-   - Place the `atlas.json` file into your GameMaker project's `Included Files` (or `datafiles` directory).
-   - In your initialization code (e.g., an `obj_game_controller` Create Event), load and parse the JSON:
+2. **Importing into GameMaker:**
+   - Extract the downloaded ZIP archive.
+   - Simply drag and drop the extracted `sprites/` folder directly into your GameMaker project directory, or import them via the IDE.
+   - Every tile will automatically appear as an individual Sprite resource.
 
-   ```gml
-   // Open the file and read it into a string
-   var _file = file_text_open_read("atlas.json");
-   var _json_string = "";
-   while (!file_text_eof(_file)) {
-       _json_string += file_text_read_string(_file);
-       file_text_readln(_file);
-   }
-   file_text_close(_file);
+3. **Pre-configured Data:**
+   - **Origins:** The `xorigin` and `yorigin` of each sprite are automatically calculated and placed at the exact center of the tile's floor footprint, ensuring flawless `depth = -y` sorting out of the box.
+   - **Collision Masks:** The bounding boxes (`bbox_left`, `bbox_right`, etc.) are mapped to the floor contact area of the oblique projection, ignoring the empty transparent spaces around roofs or tree branches.
 
-   // Parse the string into a GML Struct
-   global.tile_atlas = json_parse(_json_string);
-
-   // Example: Accessing a specific tile's collision data
-   // Assuming global.tile_atlas.tiles is an array, you can loop through it
-   var _tiles = global.tile_atlas.tiles;
-   for (var i = 0; i < array_length(_tiles); i++) {
-       var _tile_data = _tiles[i];
-       
-       if (struct_exists(_tile_data, "collision")) {
-           var _is_walkable = _tile_data.collision.isWalkable;
-           var _col_type = _tile_data.collision.type;
-           
-           // You can now store this in a ds_grid or struct mapped to the grid coordinates!
-           // e.g., global.level_grid[# _tile_data.grid_x, _tile_data.grid_y] = _col_type;
-       }
-   }
-   ```
+If you prefer to define custom polygon-based floor collision objects programmatically, the ZIP archive also includes an `_atlas_data.json` file containing the raw mathematical coordinate polygons.
 
 ## How to Use
 
@@ -82,7 +59,7 @@ Once you have exported a **ZIP Archive** from PinkTileington, here is how you us
 2. **Setup the Grid:** In the **Grid** tab on the sidebar, adjust the Cell Dimensions (Width and Height) and the **Shear Angles**. The overlay grid will dynamically skew to match your art's isometric/oblique depth lines.
 3. **Select & Extract:** Click on grid cells to select them (`Ctrl` + Click to multi-select, `Shift` + Click for a range). Then go to the **Tiles** tab and click **Extract Selected Tiles**.
 4. **Edit Collision:** Click on an extracted tile in the Gallery. In the **Collision** tab, set whether the tile is walkable or assign it a collision type.
-5. **Export:** Go to the **Export** tab and download your work as a JSON Atlas or a ZIP Archive.
+5. **Export:** Go to the **Export** tab and download your work as a JSON Atlas, a ZIP Archive, or a native GameMaker Project.
 6. **Import (Resume Work):** Click **"Import JSON"** in the header to load a previously exported JSON Atlas. This restores the grid configuration and loads the saved tiles and their collision metadata back into the editor so you can add more to it!
 
 ## Technical Data

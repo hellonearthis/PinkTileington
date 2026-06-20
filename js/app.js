@@ -555,6 +555,22 @@ const App = (() => {
         }
       });
     }
+
+    const export_gm_button_element = document.getElementById('btn-export-gm');
+    if (export_gm_button_element) {
+      export_gm_button_element.addEventListener('click', async () => {
+        if (array_of_all_extracted_tiles.length === 0) {
+          trigger_floating_toast_notification('No tiles to export', 'warning');
+          return;
+        }
+        try {
+          await Exporter.downloadGameMaker(array_of_all_extracted_tiles, shared_global_grid_configuration, CanvasSketch.getSourceFilename());
+          trigger_floating_toast_notification('GameMaker project downloaded', 'success');
+        } catch (thrown_error_object) {
+          trigger_floating_toast_notification(thrown_error_object.message, 'error');
+        }
+      });
+    }
   }
 
   /* ============================================================

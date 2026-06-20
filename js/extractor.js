@@ -91,12 +91,24 @@ const Extractor = (() => {
     // WHY: We convert the canvas pixels directly into a text string that we can safely store in JSON or display in an `img` tag.
     const extracted_base64_image_data_url = canvas_resources.canvas_element.toDataURL('image/png');
 
+    // WHAT: Calculating the axis-aligned bounding box of the footprint mask in local canvas space.
+    // WHY: Game engines like GameMaker use this to define the collision mask (bbox_left, bbox_right, etc.) so collisions match the base instead of the whole image.
+    const local_x_coords = local_canvas_quadrilateral_points.map(p => p.x_coordinate);
+    const local_y_coords = local_canvas_quadrilateral_points.map(p => p.y_coordinate);
+    const footprint_bbox = {
+      left: Math.floor(Math.min(...local_x_coords)),
+      right: Math.ceil(Math.max(...local_x_coords)),
+      top: Math.floor(Math.min(...local_y_coords)),
+      bottom: Math.ceil(Math.max(...local_y_coords)),
+    };
+
     return {
       tile_identifier_string: Grid.tileId(grid_column_index, grid_row_index),
       grid_column_index: grid_column_index,
       grid_row_index: grid_row_index,
       extracted_png_data_url: extracted_base64_image_data_url,
       tile_anchor_point_x_y: local_tile_anchor_point,
+      tile_footprint_bounding_box: footprint_bbox,
       tile_pixel_width: required_canvas_width,
       tile_pixel_height: required_canvas_height,
     };
