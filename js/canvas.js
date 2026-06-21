@@ -394,6 +394,23 @@ const CanvasSketch = (() => {
     view_pan_offset_y_pixels = (container_client_height - source_image_pixel_height * current_view_zoom_level) / 2;
   }
 
+  // WHAT: Wiping the entire canvas state back to its default empty configuration.
+  // WHY: The user requested a "Clear All" functionality to start fresh. This removes the image, resets the camera pan and zoom, and clears all tile selections so the canvas is completely blank again.
+  function reset_entire_canvas_state() {
+    loaded_source_spritesheet_image = null;
+    source_image_filename_string = '';
+    source_image_pixel_width = 0;
+    source_image_pixel_height = 0;
+    
+    view_pan_offset_x_pixels = 0;
+    view_pan_offset_y_pixels = 0;
+    current_view_zoom_level = 1;
+    is_user_currently_panning_boolean = false;
+    
+    currently_hovered_grid_cell_object = null;
+    clear_all_current_cell_selections();
+  }
+
   return {
     init: initialize_canvas_environment,
     loadImage: load_local_image_file,
@@ -409,5 +426,6 @@ const CanvasSketch = (() => {
     clearSelection: clear_all_current_cell_selections,
     selectAll: select_all_available_grid_cells,
     fitView: automatically_fit_camera_to_view_entire_image,
+    reset: reset_entire_canvas_state,
   };
 })();

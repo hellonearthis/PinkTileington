@@ -17,93 +17,94 @@ const Exporter = (() => {
     });
   }
 
-  // WHAT: Generating a single combined sprite sheet canvas from an array of individual tile images,
-  //       preserving their spatial grid layout and prepending a blank tile at index 0.
-  // WHY: Game engines perform better with one large image than thousands of tiny ones. By keeping
-  //       the original spatial arrangement (relative row/column offsets), multi-tile objects like
-  //       buildings or terrain features maintain their shape when pasted into a tile map editor.
-  //       The blank tile at position 0 is standard because most tile engines treat index 0 as
-  //       "empty / no tile", so having a transparent tile there prevents rendering artifacts.
-  async function generate_combined_sprite_sheet_canvas(array_of_extracted_tiles) {
-    if (array_of_extracted_tiles.length === 0) return null;
+  // WHAT: Generating a single combined sprite sheet canvas from an array of extraction sets,
+  //       preserving the internal spatial layout of each set and stacking sets vertically.
+  // WHY: Each extraction set represents a batch of tiles the user selected together. Their relative
+  //       pixel positions must be maintained so multi-tile objects (buildings, terrain chunks) keep
+  //       their shape on the exported spritesheet. New extractions are stacked below existing ones,
+  //       growing the sheet vertically without overwriting anything. A blank tile at position (0,0)
+  //       is standard because most tile engines treat index 0 as "empty / no tile".
+  async function generate_combined_sprite_sheet_canvas(array_of_extraction_sets) {
+    if (array_of_extraction_sets.length === 0) return null;
 
-    const standard_tile_pixel_width = array_of_extracted_tiles[0].tile_pixel_width;
-    const standard_tile_pixel_height = array_of_extracted_tiles[0].tile_pixel_height;
+    // WHAT: Determining the blank tile dimensions from the first tile in the first set.
+    // WHY: The blank tile at index 0 needs a defined size. We use the first real tile's dimensions
+    //       as a reasonable default for the blank tile slot.
+    const first_tile_in_first_set = array_of_extraction_sets[0].tiles[0];
+    const blank_tile_slot_width = first_tile_in_first_set.tile_pixel_width;
+    const blank_tile_slot_height = first_tile_in_first_set.tile_pixel_height;
 
-    // WHAT: Computing the bounding rectangle of all extracted tiles in grid space.
-    // WHY: We need to know the minimum and maximum column/row across all tiles so we can
-    //       calculate the relative offset of each tile within the spritesheet. This bounding
-    //       rectangle defines the "shape" that we want to preserve.
-    let minimum_grid_column_index = Infinity;
-    let minimum_grid_row_index = Infinity;
-    let maximum_grid_column_index = -Infinity;
-    let maximum_grid_row_index = -Infinity;
+    // WHAT: Computing the vertical stacking layout for all extraction sets.
+    // WHY: We place each set one below the other, starting below the blank tile row. This ensures
+    //       no sets overlap, and the sheet simply grows taller as more extractions are added.
+    //       We track the widest element to determine the final canvas width.
+    let current_vertical_cursor_y_pixels = blank_tile_slot_height;
+    let maximum_sheet_width_pixels = blank_tile_slot_width;
 
-    for (const current_tile_object of array_of_extracted_tiles) {
-      minimum_grid_column_index = Math.min(minimum_grid_column_index, current_tile_object.grid_column_index);
-      minimum_grid_row_index = Math.min(minimum_grid_row_index, current_tile_object.grid_row_index);
-      maximum_grid_column_index = Math.max(maximum_grid_column_index, current_tile_object.grid_column_index);
-      maximum_grid_row_index = Math.max(maximum_grid_row_index, current_tile_object.grid_row_index);
+    const array_of_set_placement_records = [];
+
+    for (const current_extraction_set of array_of_extraction_sets) {
+      array_of_set_placement_records.push({
+        extraction_set_reference: current_extraction_set,
+        placement_x_pixels: 0,
+        placement_y_pixels: current_vertical_cursor_y_pixels,
+      });
+
+      current_vertical_cursor_y_pixels += current_extraction_set.bounding_height_pixels;
+      maximum_sheet_width_pixels = Math.max(maximum_sheet_width_pixels, current_extraction_set.bounding_width_pixels);
     }
 
-    // WHAT: Calculating the spritesheet grid dimensions from the bounding rectangle.
-    // WHY: The number of columns spans from the leftmost tile to the rightmost tile (inclusive).
-    //       We add 1 extra row at the top to hold the mandatory blank tile at index 0.
-    const bounding_rectangle_column_span = (maximum_grid_column_index - minimum_grid_column_index) + 1;
-    const bounding_rectangle_row_span = (maximum_grid_row_index - minimum_grid_row_index) + 1;
+    const total_sheet_height_pixels = current_vertical_cursor_y_pixels;
 
-    // WHAT: The spritesheet width matches the bounding rectangle column span.
-    //       The spritesheet height is the bounding rectangle row span PLUS one extra row for the blank tile.
-    // WHY: Row 0 of the spritesheet is reserved for the blank transparent tile. The actual tile
-    //       data starts at row 1, preserving the spatial layout of the original grid selection.
-    const spritesheet_total_columns = bounding_rectangle_column_span;
-    const spritesheet_total_rows = bounding_rectangle_row_span + 1;
-
-    const required_sprite_sheet_pixel_width = spritesheet_total_columns * standard_tile_pixel_width;
-    const required_sprite_sheet_pixel_height = spritesheet_total_rows * standard_tile_pixel_height;
-
-    // WHAT: Creating the offscreen canvas. It starts fully transparent by default.
-    // WHY: The blank tile at row 0 and any empty gaps between tiles are automatically transparent
-    //       because an HTML canvas initializes all pixels to rgba(0,0,0,0). No explicit clearing needed.
+    // WHAT: Creating the offscreen canvas sized to fit all extraction sets stacked vertically.
+    // WHY: The canvas starts fully transparent by default, so the blank tile at (0,0) and any
+    //       gaps within sets are automatically transparent.
     const combined_offscreen_canvas_element = document.createElement('canvas');
-    combined_offscreen_canvas_element.width = required_sprite_sheet_pixel_width;
-    combined_offscreen_canvas_element.height = required_sprite_sheet_pixel_height;
+    combined_offscreen_canvas_element.width = maximum_sheet_width_pixels;
+    combined_offscreen_canvas_element.height = total_sheet_height_pixels;
     const canvas_rendering_context = combined_offscreen_canvas_element.getContext('2d');
 
-    // WHAT: Storing the spritesheet layout metadata on the canvas element itself for later retrieval.
-    // WHY: The JSON atlas builder needs to know the spritesheet grid dimensions and the blank tile
-    //       index so it can include this information in the exported metadata. Attaching it to the
-    //       canvas is a clean way to pass it through without modifying function signatures.
+    // WHAT: Storing the layout metadata on the canvas element for later retrieval by the atlas builder.
+    // WHY: The JSON atlas needs to know the spritesheet dimensions and that index 0 is the blank tile.
     combined_offscreen_canvas_element._spritesheet_layout_metadata = {
-      spritesheet_total_columns: spritesheet_total_columns,
-      spritesheet_total_rows: spritesheet_total_rows,
+      sheet_pixel_width: maximum_sheet_width_pixels,
+      sheet_pixel_height: total_sheet_height_pixels,
       blank_tile_index: 0,
     };
 
-    // WHAT: Painting each extracted tile at its correct spatial offset within the spritesheet.
-    // WHY: By subtracting the bounding rectangle minimum from each tile's grid position, we get
-    //       the relative offset. Adding 1 to the row accounts for the blank tile row at the top.
-    //       This preserves the original spatial arrangement so grouped objects keep their shape.
-    for (const current_extracted_tile_object of array_of_extracted_tiles) {
-      const relative_column_offset = current_extracted_tile_object.grid_column_index - minimum_grid_column_index;
-      const relative_row_offset = current_extracted_tile_object.grid_row_index - minimum_grid_row_index;
+    // WHAT: Building a lookup map of tile_id → spritesheet coordinates as we paint tiles.
+    // WHY: After building the spritesheet, the ZIP exporter needs to stamp the correct sheet_x
+    //       and sheet_y values onto the flat tile array before building the atlas JSON.
+    const tile_identifier_to_spritesheet_coordinates_map = new Map();
 
-      // WHAT: Adding 1 to the row offset to skip past the blank tile row.
-      // WHY: Row 0 is reserved for the blank tile. All real tile data starts at row 1.
-      const spritesheet_row_with_blank_offset = relative_row_offset + 1;
+    // WHAT: Painting each extraction set at its stacked position, drawing each tile at its
+    //       relative offset within the set.
+    // WHY: The relative offsets were frozen at extraction time to preserve spatial relationships.
+    //       Adding the set's placement offset positions the entire group correctly on the sheet.
+    for (const current_placement_record of array_of_set_placement_records) {
+      const current_set = current_placement_record.extraction_set_reference;
 
-      const target_canvas_x_coordinate = relative_column_offset * standard_tile_pixel_width;
-      const target_canvas_y_coordinate = spritesheet_row_with_blank_offset * standard_tile_pixel_height;
+      for (const current_set_tile of current_set.tiles) {
+        const absolute_sheet_x_pixels = current_placement_record.placement_x_pixels + current_set_tile.relative_x_within_set_pixels;
+        const absolute_sheet_y_pixels = current_placement_record.placement_y_pixels + current_set_tile.relative_y_within_set_pixels;
 
-      // WHAT: Storing the computed spritesheet coordinates on the tile object.
-      // WHY: The JSON atlas builder reads these properties to write the sheet_x and sheet_y
-      //       values so the game engine knows where to slice this tile from the master sheet.
-      current_extracted_tile_object.spritesheet_x_coordinate = target_canvas_x_coordinate;
-      current_extracted_tile_object.spritesheet_y_coordinate = target_canvas_y_coordinate;
+        const loaded_html_image_element = await load_base64_data_url_into_image_element_asynchronously(current_set_tile.extracted_png_data_url);
+        canvas_rendering_context.drawImage(loaded_html_image_element, absolute_sheet_x_pixels, absolute_sheet_y_pixels);
 
-      const loaded_html_image_element = await load_base64_data_url_into_image_element_asynchronously(current_extracted_tile_object.extracted_png_data_url);
-      canvas_rendering_context.drawImage(loaded_html_image_element, target_canvas_x_coordinate, target_canvas_y_coordinate);
+        // WHAT: Recording the absolute spritesheet coordinates for this tile.
+        // WHY: If a tile appears in multiple sets, the last set's coordinates will win.
+        //       This is acceptable because the tile's image data is identical across sets.
+        tile_identifier_to_spritesheet_coordinates_map.set(current_set_tile.tile_identifier_string, {
+          spritesheet_x_coordinate: absolute_sheet_x_pixels,
+          spritesheet_y_coordinate: absolute_sheet_y_pixels,
+        });
+      }
     }
+
+    // WHAT: Attaching the coordinate lookup map to the canvas for the ZIP exporter to consume.
+    // WHY: The ZIP exporter needs to stamp these coordinates onto the flat tile array before
+    //       building the atlas JSON so game engines know where to slice each tile from the sheet.
+    combined_offscreen_canvas_element._tile_spritesheet_coordinates_map = tile_identifier_to_spritesheet_coordinates_map;
 
     return combined_offscreen_canvas_element;
   }
@@ -216,24 +217,41 @@ const Exporter = (() => {
     trigger_browser_file_download_prompt(binary_blob_of_json_text, generate_dynamic_export_filename(original_source_filename_string, 'json'));
   }
 
-  // WHAT: Generating a complete ZIP archive containing the JSON manifest and a folder full of PNG images.
-  // WHY: This is the preferred method for heavy projects, so game engines can load the PNG files individually without trying to parse a multi-megabyte text file. We use the external JSZip library to construct the archive in browser memory.
-  async function generate_and_download_zip_archive_bundle(array_of_extracted_tiles, grid_configuration_settings, original_source_filename_string) {
+  // WHAT: Generating a complete ZIP archive containing the JSON manifest and the combined spritesheet.
+  // WHY: This is the preferred method for heavy projects, so game engines can load tiles from a
+  //       single spritesheet image. We accept the extraction sets to build the spatially-aware
+  //       spritesheet, then apply the resulting coordinates to the flat tile array before building
+  //       the atlas JSON.
+  async function generate_and_download_zip_archive_bundle(array_of_extracted_tiles, grid_configuration_settings, original_source_filename_string, array_of_extraction_sets) {
     if (typeof JSZip === 'undefined') {
       throw new Error('JSZip library is not loaded. Cannot create ZIP archive.');
     }
 
     const jszip_archive_instance = new JSZip();
 
-    // WHAT: Generating the combined sprite sheet canvas and modifying the tile objects with their coordinates.
-    // WHY: We must do this before building the JSON so the JSON knows where each tile is located.
-    const combined_sprite_sheet_canvas = await generate_combined_sprite_sheet_canvas(array_of_extracted_tiles);
+    // WHAT: Generating the combined sprite sheet canvas from the extraction sets.
+    // WHY: The extraction sets contain the spatial layout data needed to position tiles correctly.
+    //       The function returns a canvas with the tile coordinate lookup map attached to it.
+    const combined_sprite_sheet_canvas = await generate_combined_sprite_sheet_canvas(array_of_extraction_sets);
 
-    // WHAT: Building the atlas JSON but passing 'false' for the embed flag and including the
-    //       spritesheet layout metadata so the JSON knows the grid dimensions and blank tile index.
-    // WHY: We want the JSON to contain relative paths like "spritesheet.png" along with sheet_x
-    //       and sheet_y coordinates, plus the spritesheet layout so consuming engines understand
-    //       the spatial arrangement of tiles.
+    // WHAT: Applying the spritesheet coordinates from the lookup map onto the flat tile array.
+    // WHY: The atlas JSON builder reads spritesheet_x_coordinate and spritesheet_y_coordinate
+    //       from each tile object. Since the spritesheet was built from extraction sets (separate
+    //       objects), we must transfer those coordinates to the flat tile objects used by the JSON.
+    if (combined_sprite_sheet_canvas && combined_sprite_sheet_canvas._tile_spritesheet_coordinates_map) {
+      const coordinates_lookup_map = combined_sprite_sheet_canvas._tile_spritesheet_coordinates_map;
+      for (const current_flat_tile_object of array_of_extracted_tiles) {
+        const resolved_coordinates = coordinates_lookup_map.get(current_flat_tile_object.tile_identifier_string);
+        if (resolved_coordinates) {
+          current_flat_tile_object.spritesheet_x_coordinate = resolved_coordinates.spritesheet_x_coordinate;
+          current_flat_tile_object.spritesheet_y_coordinate = resolved_coordinates.spritesheet_y_coordinate;
+        }
+      }
+    }
+
+    // WHAT: Building the atlas JSON with spritesheet references instead of embedded images.
+    // WHY: We want the JSON to contain "spritesheet.png" along with sheet_x and sheet_y
+    //       coordinates so consuming engines know where to slice each tile from the master sheet.
     const spritesheet_layout_for_zip = combined_sprite_sheet_canvas ? combined_sprite_sheet_canvas._spritesheet_layout_metadata : null;
     const manifest_atlas_json_object = build_master_atlas_json_object(array_of_extracted_tiles, grid_configuration_settings, original_source_filename_string, false, spritesheet_layout_for_zip);
     jszip_archive_instance.file('atlas.json', JSON.stringify(manifest_atlas_json_object, null, 2));

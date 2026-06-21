@@ -10,9 +10,17 @@ const App = (() => {
   // WHY: We need a central source of truth for the grid settings. The UI sliders will mutate this object, and the Canvas will read from it to draw the overlay.
   const shared_global_grid_configuration = Grid.defaults();
 
-  // WHAT: An array holding all tiles the user has extracted so far.
-  // WHY: As users extract tiles from different parts of the image, we accumulate them here so we can eventually zip them all up together.
+  // WHAT: An array holding all tiles the user has extracted so far (deduplicated by tile ID).
+  // WHY: As users extract tiles from different parts of the image, we accumulate them here.
+  //       This flat array is used by the gallery, collision editor, and standalone JSON export.
   let array_of_all_extracted_tiles = [];
+
+  // WHAT: An array of extraction set objects, each representing one batch of tiles the user extracted.
+  // WHY: Each extraction set preserves the spatial layout of the tiles relative to each other at
+  //       the time they were extracted. When building the combined spritesheet for ZIP export, we
+  //       use these sets to lay out tiles so that grouped objects (like multi-tile buildings) keep
+  //       their shape. New extractions are appended as new sets, never overwriting existing ones.
+  let array_of_all_extraction_sets = [];
 
   // WHAT: The unique ID of the tile currently selected in the sidebar gallery.
   // WHY: When a user clicks a tile in the gallery, we need to know which one they clicked so we can show its specific collision metadata in the collision panel.
@@ -33,6 +41,8 @@ const App = (() => {
     initialize_tile_extraction_buttons();
     initialize_collision_editing_controls();
     initialize_export_buttons();
+    initialize_keyboard_event_listeners();
+    initialize_global_reset_button();
     update_status_bar_message_text('Ready — drop an image to begin');
   }
 
@@ -373,14 +383,17 @@ const App = (() => {
     if (clear_all_tiles_button_element) {
       clear_all_tiles_button_element.addEventListener('click', () => {
         array_of_all_extracted_tiles = [];
+        array_of_all_extraction_sets = [];
         rebuild_and_render_tile_gallery_user_interface();
-        trigger_floating_toast_notification('Cleared all extracted tiles', 'warning');
+        trigger_floating_toast_notification('Cleared all extracted tiles and extraction sets', 'warning');
       });
     }
   }
 
   // WHAT: Triggering the Extractor to crop out the selected tiles and saving them to the gallery.
-  // WHY: This is the core function of the app. It checks if anything is selected, calls the Extractor to do the math and clipping, merges the new tiles into the array, and switches the UI to show the gallery.
+  // WHY: This is the core function of the app. It checks if anything is selected, calls the Extractor
+  //       to do the math and clipping, builds an extraction set that preserves the spatial layout of
+  //       the tiles relative to each other, and merges the tiles into the flat gallery array.
   function execute_tile_extraction_workflow() {
     const raw_html_source_image_element = CanvasSketch.getSourceImage();
     if (!raw_html_source_image_element) {
@@ -396,7 +409,58 @@ const App = (() => {
 
     const array_of_newly_extracted_tiles = Extractor.extractMultiple(raw_html_source_image_element, array_of_selected_grid_cells, shared_global_grid_configuration);
 
-    // Merge new tiles into existing array, overwriting duplicates by ID
+    // WHAT: Computing the axis-aligned bounding box of each newly extracted tile in source-image pixel space.
+    // WHY: We need each tile's absolute pixel position on the source image so we can calculate its
+    //       relative offset within the extraction set. The extractor uses a 1px anti-aliasing padding
+    //       that shifts the drawing origin, so we replicate that same offset here for consistency.
+    const anti_aliasing_padding_pixels = 1;
+    const array_of_tile_absolute_bounds = array_of_newly_extracted_tiles.map(current_tile_object => {
+      const cell_bounding_box = Grid.getCellBounds(
+        current_tile_object.grid_column_index,
+        current_tile_object.grid_row_index,
+        shared_global_grid_configuration
+      );
+      return {
+        tile_object_reference: current_tile_object,
+        absolute_x_pixels: Math.floor(cell_bounding_box.bounding_box_x_position) - anti_aliasing_padding_pixels,
+        absolute_y_pixels: Math.floor(cell_bounding_box.bounding_box_y_position) - anti_aliasing_padding_pixels,
+      };
+    });
+
+    // WHAT: Finding the minimum X and Y across all tiles in this batch.
+    // WHY: Subtracting this minimum from each tile's absolute position gives us a zero-based
+    //       relative offset that preserves the exact spatial arrangement of the selected tiles.
+    const set_minimum_x_pixels = Math.min(...array_of_tile_absolute_bounds.map(current_tile_absolute_bound_object => current_tile_absolute_bound_object.absolute_x_pixels));
+    const set_minimum_y_pixels = Math.min(...array_of_tile_absolute_bounds.map(current_tile_absolute_bound_object => current_tile_absolute_bound_object.absolute_y_pixels));
+
+    // WHAT: Computing the total bounding rectangle of this extraction set.
+    // WHY: The exporter needs to know the width and height of the rectangle so it can reserve
+    //       the right amount of vertical space on the spritesheet when stacking sets.
+    const set_maximum_x_pixels = Math.max(...array_of_tile_absolute_bounds.map(current_tile_absolute_bound_object => current_tile_absolute_bound_object.absolute_x_pixels + current_tile_absolute_bound_object.tile_object_reference.tile_pixel_width));
+    const set_maximum_y_pixels = Math.max(...array_of_tile_absolute_bounds.map(current_tile_absolute_bound_object => current_tile_absolute_bound_object.absolute_y_pixels + current_tile_absolute_bound_object.tile_object_reference.tile_pixel_height));
+
+    // WHAT: Building the extraction set object with per-tile relative offsets.
+    // WHY: This object captures the spatial snapshot at extraction time. Even if the user later
+    //       changes the grid settings or loads a different image, this set's layout is frozen.
+    const newly_created_extraction_set = {
+      set_identifier_string: `extraction_set_${Date.now()}`,
+      bounding_width_pixels: Math.ceil(set_maximum_x_pixels - set_minimum_x_pixels),
+      bounding_height_pixels: Math.ceil(set_maximum_y_pixels - set_minimum_y_pixels),
+      tiles: array_of_tile_absolute_bounds.map(current_tile_absolute_bound_object => ({
+        tile_identifier_string: current_tile_absolute_bound_object.tile_object_reference.tile_identifier_string,
+        extracted_png_data_url: current_tile_absolute_bound_object.tile_object_reference.extracted_png_data_url,
+        tile_pixel_width: current_tile_absolute_bound_object.tile_object_reference.tile_pixel_width,
+        tile_pixel_height: current_tile_absolute_bound_object.tile_object_reference.tile_pixel_height,
+        relative_x_within_set_pixels: current_tile_absolute_bound_object.absolute_x_pixels - set_minimum_x_pixels,
+        relative_y_within_set_pixels: current_tile_absolute_bound_object.absolute_y_pixels - set_minimum_y_pixels,
+      })),
+    };
+
+    array_of_all_extraction_sets.push(newly_created_extraction_set);
+
+    // WHAT: Merging new tiles into the flat gallery array, deduplicating by tile ID.
+    // WHY: The gallery and collision editor work with a single flat list of unique tiles.
+    //       If the same grid cell is extracted again, we update its image data in the gallery.
     const map_of_existing_tiles = new Map(array_of_all_extracted_tiles.map(current_tile_object => [current_tile_object.tile_identifier_string, current_tile_object]));
     for (const newly_extracted_tile_object of array_of_newly_extracted_tiles) {
       map_of_existing_tiles.set(newly_extracted_tile_object.tile_identifier_string, newly_extracted_tile_object);
@@ -404,7 +468,7 @@ const App = (() => {
     array_of_all_extracted_tiles = Array.from(map_of_existing_tiles.values());
 
     rebuild_and_render_tile_gallery_user_interface();
-    trigger_floating_toast_notification(`Extracted ${array_of_newly_extracted_tiles.length} tile(s)`, 'success');
+    trigger_floating_toast_notification(`Extracted ${array_of_newly_extracted_tiles.length} tile(s) — Set #${array_of_all_extraction_sets.length}`, 'success');
 
     switch_visible_sidebar_tab('panel-tiles');
   }
@@ -548,7 +612,7 @@ const App = (() => {
           return;
         }
         try {
-          await Exporter.downloadZIP(array_of_all_extracted_tiles, shared_global_grid_configuration, CanvasSketch.getSourceFilename());
+          await Exporter.downloadZIP(array_of_all_extracted_tiles, shared_global_grid_configuration, CanvasSketch.getSourceFilename(), array_of_all_extraction_sets);
           trigger_floating_toast_notification('ZIP archive downloaded', 'success');
         } catch (thrown_error_object) {
           trigger_floating_toast_notification(thrown_error_object.message, 'error');
@@ -651,6 +715,131 @@ const App = (() => {
       toast_div_element.style.animation = `toastOut var(--transition-base) ease forwards`;
       toast_div_element.addEventListener('animationend', () => toast_div_element.remove());
     }, 3000);
+  }
+
+  // WHAT: Registering window-level keyboard event listeners to capture arrow key presses.
+  // WHY: The user wants to adjust the grid's origin offset using the keyboard arrow keys. We listen globally so that they can press these keys at any time. We also ensure that we do not intercept the key events if the user is currently typing into an input field, select box, or textarea, to preserve standard browser form interaction.
+  function initialize_keyboard_event_listeners() {
+    window.addEventListener('keydown', (keyboard_press_event) => {
+      // WHAT: Checking if the user is currently focused on an interactive input element.
+      // WHY: If they are typing in an input box or selecting from a dropdown, pressing the arrow keys should move the text cursor or change the dropdown selection, not move the grid.
+      const currently_active_html_element = document.activeElement;
+      if (currently_active_html_element) {
+        const active_element_tag_name = currently_active_html_element.tagName.toLowerCase();
+        if (active_element_tag_name === 'input' || active_element_tag_name === 'textarea' || active_element_tag_name === 'select') {
+          return;
+        }
+      }
+
+      // WHAT: Determining which arrow key was pressed and adjusting the corresponding offset.
+      // WHY: Left/Right arrow keys change the horizontal offset, and Up/Down arrow keys change the vertical offset. Holding down the Shift key allows for faster movement (e.g. 10 pixels instead of 1 pixel per keypress).
+      let was_grid_origin_modified = false;
+      const pixel_shift_amount = keyboard_press_event.shiftKey ? 10 : 1;
+
+      if (keyboard_press_event.key === 'ArrowLeft') {
+        shared_global_grid_configuration.grid_origin_offset_x_pixels -= pixel_shift_amount;
+        was_grid_origin_modified = true;
+      } else if (keyboard_press_event.key === 'ArrowRight') {
+        shared_global_grid_configuration.grid_origin_offset_x_pixels += pixel_shift_amount;
+        was_grid_origin_modified = true;
+      } else if (keyboard_press_event.key === 'ArrowUp') {
+        shared_global_grid_configuration.grid_origin_offset_y_pixels -= pixel_shift_amount;
+        was_grid_origin_modified = true;
+      } else if (keyboard_press_event.key === 'ArrowDown') {
+        shared_global_grid_configuration.grid_origin_offset_y_pixels += pixel_shift_amount;
+        was_grid_origin_modified = true;
+      }
+
+      // WHAT: Updating the canvas and UI if the origin was modified.
+      // WHY: If a change occurred, we must push the updated configuration to the CanvasSketch renderer so it redraws the grid instantly, and update the UI sliders so they stay synchronized. We also prevent the default scrolling behavior of the arrow keys.
+      if (was_grid_origin_modified) {
+        keyboard_press_event.preventDefault();
+        CanvasSketch.setGridConfig(shared_global_grid_configuration);
+        synchronize_grid_origin_sliders_with_configuration_state();
+      }
+    });
+  }
+
+  // WHAT: Syncing the visual sliders for the grid origin X and Y offsets with the current state values.
+  // WHY: When the user adjusts the origin using keyboard shortcuts (like arrow keys), the state values change under the hood. We must update the HTML sliders and text labels so the sidebar UI matches the new state.
+  function synchronize_grid_origin_sliders_with_configuration_state() {
+    const slider_element_for_origin_x = document.getElementById('ctrl-originX');
+    if (slider_element_for_origin_x) {
+      slider_element_for_origin_x.value = shared_global_grid_configuration.grid_origin_offset_x_pixels;
+    }
+    const label_element_for_origin_x = document.getElementById('val-originX');
+    if (label_element_for_origin_x) {
+      label_element_for_origin_x.textContent = `${shared_global_grid_configuration.grid_origin_offset_x_pixels}px`;
+    }
+
+    const slider_element_for_origin_y = document.getElementById('ctrl-originY');
+    if (slider_element_for_origin_y) {
+      slider_element_for_origin_y.value = shared_global_grid_configuration.grid_origin_offset_y_pixels;
+    }
+    const label_element_for_origin_y = document.getElementById('val-originY');
+    if (label_element_for_origin_y) {
+      label_element_for_origin_y.textContent = `${shared_global_grid_configuration.grid_origin_offset_y_pixels}px`;
+    }
+  }
+
+  // WHAT: Wiring up the global Reset All button in the header.
+  // WHY: The user wants a way to completely clear the page and start over without reloading the browser tab. We must reset the grid math, clear the canvas, wipe all exported tiles, destroy collision data, and update the HTML sliders to match the defaults.
+  function initialize_global_reset_button() {
+    const reset_all_button_element = document.getElementById('btn-reset');
+    if (!reset_all_button_element) return;
+
+    reset_all_button_element.addEventListener('click', () => {
+      // 1. Reset Canvas State
+      CanvasSketch.reset();
+      
+      // 2. Clear Extracted Tiles and Extraction Sets
+      array_of_all_extracted_tiles = [];
+      array_of_all_extraction_sets = [];
+      currently_active_tile_identifier_string = null;
+      rebuild_and_render_tile_gallery_user_interface();
+      
+      // 3. Destroy Collision Database
+      Collision.clear();
+      
+      // 4. Restore Grid Defaults
+      Object.assign(shared_global_grid_configuration, Grid.defaults());
+      CanvasSketch.setGridConfig(shared_global_grid_configuration);
+      
+      // 5. Synchronize UI Sliders and Inputs
+      document.getElementById('ctrl-cellW').value = shared_global_grid_configuration.cell_width_pixels;
+      document.getElementById('val-cellW').textContent = shared_global_grid_configuration.cell_width_pixels;
+      
+      document.getElementById('ctrl-cellH').value = shared_global_grid_configuration.cell_height_pixels;
+      document.getElementById('val-cellH').textContent = shared_global_grid_configuration.cell_height_pixels;
+      
+      document.getElementById('ctrl-shearX').value = 0;
+      document.getElementById('val-shearX').textContent = '0°';
+      
+      document.getElementById('ctrl-shearY').value = 0;
+      document.getElementById('val-shearY').textContent = '0°';
+      
+      document.getElementById('ctrl-cols').value = shared_global_grid_configuration.total_grid_columns;
+      document.getElementById('val-cols').textContent = shared_global_grid_configuration.total_grid_columns;
+      
+      document.getElementById('ctrl-rows').value = shared_global_grid_configuration.total_grid_rows;
+      document.getElementById('val-rows').textContent = shared_global_grid_configuration.total_grid_rows;
+
+      synchronize_grid_origin_sliders_with_configuration_state();
+
+      // 6. Reset UI State
+      const file_drop_zone_element = document.querySelector('.drop-zone');
+      if (file_drop_zone_element) file_drop_zone_element.classList.add('empty-state');
+      
+      const dimensions_text_element = document.getElementById('status-dimensions');
+      if (dimensions_text_element) dimensions_text_element.textContent = '—';
+      
+      const status_dot_element = document.getElementById('status-dot');
+      if (status_dot_element) status_dot_element.className = 'status-dot warning';
+
+      switch_visible_sidebar_tab('panel-grid');
+      update_status_bar_message_text('Page reset successfully');
+      trigger_floating_toast_notification('All data cleared', 'warning');
+    });
   }
 
   return { init: execute_application_boot_sequence };
